@@ -2,15 +2,15 @@
 
 A customer-facing cart pricing engine that calculates optimal discounts across brand offers, platform offers, and cart-level promotions — with natural language rule creation and PDF cart upload.
 
-**Live Demo:** [Deployment URL here]
+**Live Demo:** https://discount-engine-iota.vercel.app
 
 ---
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/discount-engine.git
-cd discount-engine
+git clone https://github.com/dhruvWorkss/discount-engine-assignment.git
+cd discount-engine-assignment
 npm install && npm run dev
 ```
 
