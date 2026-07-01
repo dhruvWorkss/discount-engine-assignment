@@ -1,128 +1,83 @@
-/**
- * App.jsx
- *
- * Top-level component. Manages state for rules, cart items, and results.
- * Wires together CSV upload → parse → engine → display.
- */
-
-import { useState } from 'react'
+import { useState, useCallback, useEffect } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import CsvUploader from './components/CsvUploader.jsx'
 import DataTable from './components/DataTable.jsx'
 import ErrorBanner from './components/ErrorBanner.jsx'
+import NlpRuleInput from './components/NlpRuleInput.jsx'
+import PdfUploader from './components/PdfUploader.jsx'
+import CartResults from './components/CartResults.jsx'
+import ThresholdNudge from './components/ThresholdNudge.jsx'
 import { parseRulesCSV, parseCartCSV } from './engine/csvParser.js'
-import { processCart, cartTotal } from './engine/discountEngine.js'
-
-// ── Column definitions ───────────────────────────────────────────
+import { calculateCartSummary } from './engine/discountEngine.js'
 
 const RULES_COLUMNS = [
-  { key: 'ruleId',    label: 'Rule ID' },
-  { key: 'scope',     label: 'Scope',      render: (v) => v.charAt(0).toUpperCase() + v.slice(1) },
-  { key: 'appliesTo', label: 'Applies To' },
-  { key: 'type',      label: 'Type',       render: (v) => v.charAt(0).toUpperCase() + v.slice(1) },
+  { key: 'ruleId', label: 'Rule ID' },
+  { key: 'scope', label: 'Scope', render: (v) => v.charAt(0).toUpperCase() + v.slice(1) },
+  { key: 'appliesTo', label: 'Applies To', render: (v) => v || '(entire cart)' },
+  { key: 'type', label: 'Type', render: (v) => v.charAt(0).toUpperCase() + v.slice(1) },
   {
     key: 'value',
     label: 'Value',
     render: (v, row) => row.type === 'percentage' ? `${v}% off` : `Rs.${v} off`,
   },
-  { key: 'stackable', label: 'Stackable',  render: (v) => (v ? 'Yes' : 'No') },
+  { key: 'stackable', label: 'Stackable', render: (v) => (v ? 'Yes' : 'No') },
+  {
+    key: 'minCartValue',
+    label: 'Condition',
+    render: (v) => v ? `Cart >= Rs.${v.toLocaleString('en-IN')}` : '--',
+  },
 ]
 
 const CART_COLUMNS = [
-  { key: 'itemId',    label: 'Item' },
-  { key: 'product',   label: 'Product' },
-  { key: 'brand',     label: 'Brand' },
-  { key: 'platform',  label: 'Platform' },
+  { key: 'itemId', label: 'Item' },
+  { key: 'product', label: 'Product' },
+  { key: 'brand', label: 'Brand' },
+  { key: 'platform', label: 'Platform' },
   { key: 'basePrice', label: 'Base Price', render: (v) => `Rs.${v.toLocaleString('en-IN')}` },
 ]
 
-const RESULTS_COLUMNS = [
-  { key: 'itemId',    label: 'Item' },
-  { key: 'product',   label: 'Product' },
-  { key: 'basePrice', label: 'Base Price',  render: (v) => `Rs.${v.toLocaleString('en-IN')}` },
-  { key: 'finalPrice',label: 'Final Price',
-    render: (v, row) => (
-      <span style={{ fontWeight: 700, color: row.totalDiscount > 0 ? '#1e5c2c' : '#131A48' }}>
-        Rs.{v.toLocaleString('en-IN')}
-      </span>
-    ),
-  },
-  {
-    key: 'totalDiscount',
-    label: 'You Save',
-    render: (v) =>
-      v > 0 ? (
-        <span style={{ color: '#1e5c2c', fontWeight: 600 }}>Rs.{v.toLocaleString('en-IN')}</span>
-      ) : (
-        <span style={{ color: '#888' }}>—</span>
-      ),
-  },
-  {
-    key: 'reasoning',
-    label: 'Offer Applied',
-    render: (v) => (
-      <span style={{ color: v === 'No offers available' ? '#888' : '#131A48', fontStyle: v === 'No offers available' ? 'italic' : 'normal' }}>
-        {v}
-      </span>
-    ),
-  },
-]
+function useDarkMode() {
+  const [dark, setDark] = useState(() => {
+    if (typeof window === 'undefined') return false
+    const stored = localStorage.getItem('discount-engine-dark')
+    if (stored !== null) return stored === 'true'
+    return window.matchMedia('(prefers-color-scheme: dark)').matches
+  })
 
-// ── Styles ───────────────────────────────────────────────────────
+  useEffect(() => {
+    const root = document.documentElement
+    if (dark) {
+      root.classList.add('dark')
+    } else {
+      root.classList.remove('dark')
+    }
+    localStorage.setItem('discount-engine-dark', String(dark))
+  }, [dark])
 
-const S = {
-  page:    { minHeight: '100vh', background: '#f7f7f9', fontFamily: 'Arial, sans-serif' },
-  header:  { background: '#131A48', padding: '0.85rem 2rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  logoTxt: { fontFamily: 'Georgia, serif', fontSize: 17, fontWeight: 700, color: '#fff', letterSpacing: '-0.02em' },
-  logoSpan:{ color: '#FF5800' },
-  headerSub: { fontSize: 11, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.07em' },
-  main:    { maxWidth: 960, margin: '0 auto', padding: '1.8rem 1.5rem' },
-  section: { background: '#fff', border: '1px solid #CECECE', borderRadius: 6, padding: '1.2rem 1.4rem', marginBottom: '1.2rem' },
-  sectionTitle: { fontFamily: 'Georgia, serif', fontWeight: 700, fontSize: 14, color: '#131A48', marginBottom: '0.7rem', paddingBottom: 6, borderBottom: '2px solid #FF5800', display: 'inline-block' },
-  grid2:   { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' },
-  btn:     {
-    background: '#FF5800', color: '#fff', border: 'none', borderRadius: 4,
-    padding: '0.65rem 2rem', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-    letterSpacing: '0.04em', textTransform: 'uppercase',
-  },
-  btnDisabled: {
-    background: '#CECECE', color: '#fff', border: 'none', borderRadius: 4,
-    padding: '0.65rem 2rem', fontSize: 13, fontWeight: 700, cursor: 'not-allowed',
-    letterSpacing: '0.04em', textTransform: 'uppercase',
-  },
-  totalRow: {
-    display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
-    gap: '1rem', marginTop: '0.75rem', paddingTop: '0.75rem',
-    borderTop: '2px solid #131A48',
-  },
-  totalLabel: { fontWeight: 700, fontSize: 14, color: '#131A48' },
-  totalValue: { fontWeight: 700, fontSize: 16, color: '#131A48' },
-  tag: (color, bg) => ({
-    display: 'inline-block', fontSize: 10, fontWeight: 700, padding: '1px 6px',
-    borderRadius: 20, background: bg, color, textTransform: 'uppercase', letterSpacing: '0.04em',
-  }),
+  return [dark, setDark]
 }
 
-// ── Component ────────────────────────────────────────────────────
-
 export default function App() {
-  const [rules, setRules]           = useState([])
-  const [rulesErrors, setRulesErr]  = useState([])
+  const [dark, setDark] = useDarkMode()
+
+  const [rules, setRules] = useState([])
+  const [rulesErrors, setRulesErr] = useState([])
   const [rulesFileName, setRulesFileName] = useState('')
 
-  const [cartItems, setCartItems]   = useState([])
+  const [cartItems, setCartItems] = useState([])
   const [cartErrors, setCartErrors] = useState([])
-  const [cartFileName, setCartFileName]   = useState('')
+  const [cartFileName, setCartFileName] = useState('')
 
-  const [results, setResults]       = useState(null)
-
-  // ── Handlers ──
+  const [summary, setSummary] = useState(null)
+  const [apiKey, setApiKey] = useState('')
+  const [activeTab, setActiveTab] = useState('csv')
 
   function handleRulesLoad(csvText, fileName) {
     const { data, errors } = parseRulesCSV(csvText)
     setRules(data)
     setRulesErr(errors)
     setRulesFileName(fileName)
-    setResults(null) // clear stale results
+    setSummary(null)
   }
 
   function handleCartLoad(csvText, fileName) {
@@ -130,102 +85,241 @@ export default function App() {
     setCartItems(data)
     setCartErrors(errors)
     setCartFileName(fileName)
-    setResults(null)
+    setSummary(null)
   }
 
+  function handlePdfCartLoad(items) {
+    setCartItems(items)
+    setCartErrors([])
+    setCartFileName('PDF upload')
+    setSummary(null)
+  }
+
+  const handleAddRule = useCallback((newRule) => {
+    setRules((prev) => [...prev, newRule])
+    setSummary(null)
+  }, [])
+
+  const handleDeleteRule = useCallback((ruleId) => {
+    setRules((prev) => prev.filter((r) => r.ruleId !== ruleId))
+    setSummary(null)
+  }, [])
+
   function handleCalculate() {
-    const res = processCart(cartItems, rules)
-    setResults(res)
+    const result = calculateCartSummary(cartItems, rules)
+    setSummary(result)
   }
 
   const canCalculate = rules.length > 0 && cartItems.length > 0
 
-  // ── Render ──
+  // Add a delete column to the rules columns
+  const rulesColumnsWithDelete = [
+    ...RULES_COLUMNS,
+    {
+      key: '_delete',
+      label: '',
+      render: (_v, row) => (
+        <button
+          onClick={(e) => { e.stopPropagation(); handleDeleteRule(row.ruleId) }}
+          className="text-slate-400 hover:text-red-500 transition-colors p-0.5 rounded hover:bg-red-50"
+          title="Remove rule"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      ),
+    },
+  ]
 
   return (
-    <div style={S.page}>
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-[#0c1222] dark:to-[#0a0f1a] transition-colors">
       {/* Header */}
-      <div style={S.header}>
-        <div style={S.logoTxt}>O<span style={S.logoSpan}>pp</span>tra</div>
-        <div style={S.headerSub}>Discount Engine</div>
-      </div>
-
-      <div style={S.main}>
-
-        {/* Upload row */}
-        <div style={S.grid2}>
-          {/* Rules upload */}
-          <div style={S.section}>
-            <div style={S.sectionTitle}>Discount Rules</div>
-            <CsvUploader
-              label="rules.csv"
-              description="Upload your discount rules CSV"
-              onLoad={handleRulesLoad}
-              hasData={rules.length > 0}
-              fileName={rulesFileName}
-            />
-            <ErrorBanner errors={rulesErrors} />
-            {rules.length > 0 && (
-              <div style={{ marginTop: '0.75rem' }}>
-                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-                  {rules.length} rule{rules.length > 1 ? 's' : ''} loaded
-                </div>
-                <DataTable columns={RULES_COLUMNS} rows={rules} />
-              </div>
+      <header className="bg-[#131A48] dark:bg-[#0f1535] px-6 py-3 flex items-center justify-between shadow-lg dark:shadow-black/30 border-b border-transparent dark:border-slate-700/50">
+        <div className="flex items-center gap-3">
+          <h1 className="text-white font-serif font-bold text-lg tracking-tight">
+            O<span className="text-orange-500">pp</span>tra
+          </h1>
+          <span className="hidden sm:inline-block text-xs text-white/40 uppercase tracking-widest">
+            Discount Engine
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          {/* Dark mode toggle */}
+          <button
+            onClick={() => setDark((d) => !d)}
+            className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+            title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {dark ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+              </svg>
             )}
+          </button>
+          <div className="text-[10px] text-white/30 uppercase tracking-wider">
+            FDE Assignment
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-5xl mx-auto px-4 py-6 space-y-5">
+
+        {/* Input Section - Two columns */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+          {/* Rules Panel */}
+          <div className="bg-white dark:bg-[#141c2e] rounded-xl border border-slate-200 dark:border-slate-600/40 shadow-sm dark:shadow-black/20 overflow-hidden">
+            <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-600/40">
+              <h2 className="font-serif font-bold text-[#131A48] dark:text-slate-100 text-sm">
+                <span className="inline-block w-1 h-4 bg-orange-500 rounded mr-2 align-middle"></span>
+                Discount Rules
+              </h2>
+            </div>
+            <div className="p-5 space-y-4">
+              <CsvUploader
+                label="rules.csv"
+                description="Upload your discount rules CSV"
+                onLoad={handleRulesLoad}
+                hasData={rules.length > 0}
+                fileName={rulesFileName}
+              />
+              <ErrorBanner errors={rulesErrors} />
+
+              {/* NLP Rule Input */}
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-600/40">
+                <div className="text-xs font-bold text-slate-500 dark:text-orange-400/80 uppercase tracking-wide mb-2">
+                  Or add a rule using natural language
+                </div>
+                <NlpRuleInput
+                  rules={rules}
+                  onAddRule={handleAddRule}
+                  apiKey={apiKey}
+                  onApiKeyChange={setApiKey}
+                />
+              </div>
+
+              {/* Rules table */}
+              <AnimatePresence>
+                {rules.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                  >
+                    <div className="text-xs text-slate-400 dark:text-slate-300 mb-1.5">
+                      {rules.length} rule{rules.length > 1 ? 's' : ''} active
+                    </div>
+                    <DataTable columns={rulesColumnsWithDelete} rows={rules} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
 
-          {/* Cart upload */}
-          <div style={S.section}>
-            <div style={S.sectionTitle}>Cart Items</div>
-            <CsvUploader
-              label="cart.csv"
-              description="Upload your cart CSV"
-              onLoad={handleCartLoad}
-              hasData={cartItems.length > 0}
-              fileName={cartFileName}
-            />
-            <ErrorBanner errors={cartErrors} />
-            {cartItems.length > 0 && (
-              <div style={{ marginTop: '0.75rem' }}>
-                <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-                  {cartItems.length} item{cartItems.length > 1 ? 's' : ''} loaded
-                </div>
-                <DataTable columns={CART_COLUMNS} rows={cartItems} />
+          {/* Cart Panel */}
+          <div className="bg-white dark:bg-[#141c2e] rounded-xl border border-slate-200 dark:border-slate-600/40 shadow-sm dark:shadow-black/20 overflow-hidden">
+            <div className="px-5 py-3 border-b border-slate-100 dark:border-slate-600/40">
+              <h2 className="font-serif font-bold text-[#131A48] dark:text-slate-100 text-sm">
+                <span className="inline-block w-1 h-4 bg-orange-500 rounded mr-2 align-middle"></span>
+                Cart Items
+              </h2>
+            </div>
+            <div className="p-5 space-y-4">
+              {/* Tab switcher */}
+              <div className="flex gap-1 p-0.5 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                <TabButton active={activeTab === 'csv'} onClick={() => setActiveTab('csv')}>
+                  CSV Upload
+                </TabButton>
+                <TabButton active={activeTab === 'pdf'} onClick={() => setActiveTab('pdf')}>
+                  PDF Upload
+                </TabButton>
               </div>
-            )}
+
+              {activeTab === 'csv' ? (
+                <CsvUploader
+                  label="cart.csv"
+                  description="Upload your cart CSV"
+                  onLoad={handleCartLoad}
+                  hasData={cartItems.length > 0}
+                  fileName={cartFileName}
+                />
+              ) : (
+                <PdfUploader onCartLoaded={handlePdfCartLoad} />
+              )}
+
+              <ErrorBanner errors={cartErrors} />
+
+              {/* Cart items table */}
+              <AnimatePresence>
+                {cartItems.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                  >
+                    <div className="text-xs text-slate-400 dark:text-slate-300 mb-1.5">
+                      {cartItems.length} item{cartItems.length > 1 ? 's' : ''} in cart
+                    </div>
+                    <DataTable columns={CART_COLUMNS} rows={cartItems} />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
 
         {/* Calculate button */}
-        <div style={{ textAlign: 'center', marginBottom: '1.2rem' }}>
+        <div className="text-center">
           <button
-            style={canCalculate ? S.btn : S.btnDisabled}
             onClick={handleCalculate}
             disabled={!canCalculate}
+            className={`px-8 py-3 text-sm font-bold uppercase tracking-wider rounded-lg shadow-sm transition-all
+              ${canCalculate
+                ? 'bg-orange-500 text-white hover:bg-orange-600 hover:shadow-md dark:shadow-orange-500/20 active:scale-[0.98]'
+                : 'bg-slate-200 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed'
+              }`}
           >
             Calculate Discounts
           </button>
           {!canCalculate && (
-            <div style={{ fontSize: 11, color: '#888', marginTop: 6 }}>
-              Upload both files to calculate
-            </div>
+            <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">Upload both rules and cart to calculate</p>
           )}
         </div>
 
-        {/* Results */}
-        {results && (
-          <div style={S.section}>
-            <div style={S.sectionTitle}>Cart Summary</div>
-            <DataTable columns={RESULTS_COLUMNS} rows={results} />
-            <div style={S.totalRow}>
-              <span style={S.totalLabel}>Cart Total</span>
-              <span style={S.totalValue}>Rs.{cartTotal(results).toLocaleString('en-IN')}</span>
-            </div>
-          </div>
+        {/* Threshold nudge */}
+        {summary && !summary.cartOffer && (
+          <ThresholdNudge subtotal={summary.subtotal} cartRules={rules} />
         )}
 
-      </div>
+        {/* Results */}
+        <AnimatePresence>
+          {summary && <CartResults summary={summary} />}
+        </AnimatePresence>
+
+      </main>
+
+      {/* Footer */}
+      <footer className="text-center py-6 text-xs text-slate-400 dark:text-slate-500/70">
+        Built for Opptra FDE Intern Assignment
+      </footer>
     </div>
+  )
+}
+
+function TabButton({ active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex-1 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors
+        ${active
+          ? 'bg-white dark:bg-orange-500/20 text-[#131A48] dark:text-orange-300 shadow-sm dark:border dark:border-orange-500/30'
+          : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+        }`}
+    >
+      {children}
+    </button>
   )
 }
