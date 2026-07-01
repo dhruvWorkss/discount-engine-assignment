@@ -1,8 +1,8 @@
 # Opptra Discount Engine
 
-A customer-facing cart pricing engine that calculates optimal discounts across brand offers, platform offers, and cart-level promotions — with natural language rule creation and PDF cart upload.
+A customer-facing cart pricing engine that resolves competing discount rules — brand vs platform vs cart-level — and surfaces the best deal to the customer with a clear explanation. Built for the Opptra FDE Intern assignment.
 
-**Live Demo:** https://discount-engine-iota.vercel.app
+> **[Live Demo](https://discount-engine-iota.vercel.app)** · **[Video Walkthrough](https://www.loom.com/share/eb892fe1087c4526951ab105981b6081)**
 
 ---
 
@@ -14,36 +14,18 @@ cd discount-engine-assignment
 npm install && npm run dev
 ```
 
-Open http://localhost:5173 — upload the sample CSVs from `sample-data/` and click "Calculate Discounts".
+Open `http://localhost:5173` → upload sample CSVs from `sample-data/` → click **Calculate Discounts**.
 
 ---
 
-## Features
+## What It Does
 
-### Foundation — Discount Engine
-- Handles brand, platform, and cart-level discount rules
-- Picks the maximum-saving non-stackable rule per item
-- Stacks stackable rules on top of the winner
-- Shows customer-readable explanations for every decision
-
-### Task 1 — Cart-Level Offers
-- Cart rules evaluated after all item-level discounts
-- Threshold-based triggers (e.g., "10% off if cart ≥ Rs.4,000")
-- Separate cart offer row in results with clear savings display
-- "Add Rs.X more to unlock Y% off" nudge when cart is close to threshold
-
-### Task 2 — Natural Language Rule Input
-- Type a discount rule in plain English → Claude API parses it into a structured rule
-- Confidence scoring: high-confidence fields in green, uncertain fields in amber
-- Ambiguous inputs surface specific feedback ("missing discount value")
-- Editable confirmation step before rule is applied
-- Engine re-runs automatically with the new rule
-
-### Task 3 — PDF Cart Upload
-- Client-side PDF parsing (pdf.js) — no backend needed
-- Extracts Product, Brand, Platform, Base Price from table-format PDFs
-- Preview with validation indicators before confirming
-- Handles partial/malformed data gracefully with row-level errors
+| Requirement | Implementation |
+|---|---|
+| **Foundation** | Picks max-saving rule per item, stacks stackable rules on top, produces customer-readable reasoning |
+| **Task 1 — Cart Offer** | Evaluates cart-level rules post item-discounts; shows as a separate savings row; nudges user when near threshold |
+| **Task 2 — NLP Rules** | Plain-English → structured rule via local regex + Claude API fallback; confidence scoring; confirmation step; ambiguity handling |
+| **Task 3 — PDF Upload** | Client-side pdf.js extraction; preview table with validation; graceful partial-failure handling |
 
 ---
 
@@ -51,91 +33,119 @@ Open http://localhost:5173 — upload the sample CSVs from `sample-data/` and cl
 
 ```
 src/
-├── engine/              # Pure logic — no UI, no side effects
-│   ├── discountEngine.js   # Core discount calculation
-│   ├── csvParser.js        # CSV → typed objects
-│   ├── nlpRuleParser.js    # Natural language → DiscountRule
-│   └── pdfCartParser.js    # PDF → CartItem[]
-├── components/          # UI layer
-│   ├── CartResults.jsx     # Results display with cart offer
-│   ├── NlpRuleInput.jsx    # NLP text input + confirmation
-│   ├── PdfUploader.jsx     # PDF upload + preview
-│   ├── ThresholdNudge.jsx  # "Add X more" incentive
-│   ├── CsvUploader.jsx     # CSV file input
-│   ├── DataTable.jsx       # Reusable table
-│   └── ErrorBanner.jsx     # Error display
-└── App.jsx              # State management + layout
+├── engine/                  ← Pure logic, zero UI
+│   ├── discountEngine.js        Core discount math
+│   ├── csvParser.js             CSV → typed objects
+│   ├── nlpRuleParser.js         NL → DiscountRule (local + API)
+│   └── pdfCartParser.js         PDF → CartItem[]
+│
+├── components/              ← Presentation layer
+│   ├── CartResults.jsx          Results + cart offer + export
+│   ├── NlpRuleInput.jsx         Text input + confirmation card
+│   ├── PdfUploader.jsx          PDF upload + preview
+│   ├── ThresholdNudge.jsx       "Add Rs.X more" incentive
+│   ├── CsvUploader.jsx          File input
+│   ├── DataTable.jsx            Reusable table
+│   └── ErrorBanner.jsx          Validation errors
+│
+└── App.jsx                  ← State + layout + dark mode
 ```
 
-Input adapters (CSV, NLP, PDF) are completely independent of the engine. Adding a fourth input mode means writing one new adapter — the calculator stays untouched.
+**Key principle:** Input adapters are fully decoupled from the engine. Adding a fifth input method (API endpoint, voice, barcode scan) means writing one adapter — the discount calculator stays untouched.
+
+---
+
+## Discount Selection Logic
+
+```
+1. Find all rules matching an item (by brand or platform scope)
+2. Among non-stackable matches → pick the one giving the LARGEST rupee saving
+3. Apply stackable rules on top of the reduced price (compound, in sequence)
+4. After all items are priced → check cart-level rules against post-discount subtotal
+5. If threshold met → apply cart discount on the full subtotal
+```
+
+### Expected Output (Sample Data)
+
+| Item | Base Price | Final Price | What Happened |
+|------|-----------|-------------|---------------|
+| ITEM-01 | Rs.1,299 | **Rs.1,104** | Platform 15% beats brand Rs.150 (saves Rs.195 vs Rs.150) |
+| ITEM-02 | Rs.849 | **Rs.629** | Brand Rs.150 off → then platform 10% stacked on top |
+| ITEM-03 | Rs.599 | **Rs.509** | Platform 15% off |
+| ITEM-04 | Rs.2,499 | **Rs.2,499** | No rules match — full price |
+| ITEM-05 | Rs.449 | **Rs.382** | Platform 15% off |
+| ITEM-06 | Rs.899 | **Rs.809** | Platform 10% off (stackable, applies alone) |
+| | | | |
+| **Subtotal** | | **Rs.5,932** | Sum of final item prices |
+| **Cart Offer** | | **−Rs.593** | RULE-04: 10% off (Rs.5,932 ≥ Rs.4,000 threshold) |
+| **Final Total** | | **Rs.5,339** | |
 
 ---
 
 ## Design Decisions
 
-### Why client-side PDF parsing?
-The assignment says "a backend is optional — both tasks can be done client-side." pdf.js handles the parsing without any server, reducing deployment complexity and eliminating CORS/auth concerns. Tradeoff: complex multi-page PDFs with unusual layouts may need server-side OCR — but for the expected table format, client-side is reliable and fast.
-
-### Why confidence scoring on NLP output?
-An LLM can hallucinate or misinterpret ambiguous inputs. Rather than silently applying a bad rule, the confidence score gives users a signal about parsing reliability. Fields with <80% confidence are highlighted so users know to double-check before confirming.
-
-### Why show "unresolvable" errors instead of guessing?
-"Give a discount for big orders" has no value or threshold. Instead of inventing one (which would be wrong), the system explains exactly what's missing and suggests a rewrite. This matches how a real product should behave — no surprises for the customer.
-
 ### Cart offer applied after item discounts
-This is a deliberate ordering: item-level discounts reduce individual prices first, then the cart-level rule checks the post-discount subtotal against its threshold. This means the threshold is harder to meet (which protects margins) and the cart discount compounds on already-reduced prices.
+Item-level discounts reduce prices first, then the cart rule checks the post-discount subtotal against its threshold. This protects margins — the threshold is harder to hit — and the cart discount compounds on already-reduced prices. The alternative (checking against base prices) would be more generous to customers but isn't how the spec defines it.
+
+### Local-first NLP parsing
+Common patterns (`"20% off for X brand, stackable"`, `"Rs.100 off on Flipkart"`) are parsed with regex locally — no API key, no latency, no cost. The Claude API is a fallback for complex or ambiguous inputs only. This means the feature works out of the box for evaluators without needing credentials.
+
+### Confidence scoring on parsed rules
+An LLM (or regex) can misinterpret ambiguous input. Rather than silently applying a bad rule, the confidence score (shown in the confirmation card) signals parsing reliability. Below 80% → amber warning. This gives the user agency before the rule touches their cart.
+
+### "Unresolvable" over "guess"
+`"Give a discount for big orders"` has no value or threshold. Instead of inventing one, the system explains what's missing and suggests a rewrite. A real product shouldn't surprise customers — same principle applies to the admin creating rules.
+
+### Client-side PDF parsing
+No backend = simpler deployment, no CORS issues, no auth. pdf.js handles standard table-format PDFs reliably. Tradeoff: unusual layouts or scanned images would need server-side OCR — documented, not silently broken.
 
 ### Flat discount capped at item price
-A Rs.150 flat discount on a Rs.100 item returns Rs.0, not Rs.-50. The engine caps flat discounts at the current price to prevent negative amounts.
+`Rs.150 off` on a `Rs.100` item → `Rs.0`, not `-Rs.50`. Prevents negative line items from reaching the customer.
 
 ---
 
-## Edge Cases Handled
+## Edge Cases
 
-- **Cart just below threshold**: Shows a nudge ("Add Rs.68 more to unlock 10% off")
-- **LLM returns invalid JSON**: Caught and surfaced as a parse error with retry guidance
-- **PDF with missing columns**: Partial extraction + per-row error messages
-- **Multiple non-stackable rules**: Largest saving wins, regardless of scope
-- **No rules match an item**: Returns base price with "No offers available"
-- **Zero/negative values in CSV**: Rejected at parse time with specific error messages
-- **Duplicate rule IDs from NLP**: Auto-generates next sequential ID
+| Scenario | Behavior |
+|----------|----------|
+| Cart just below threshold | Shows "Add Rs.X more to unlock Y% off" nudge |
+| Ambiguous NLP input | Rejects with specific feedback, suggests rewrite |
+| Invalid/malformed PDF rows | Skipped with visible warning, valid rows still extracted |
+| Multiple non-stackable rules | Largest rupee saving wins, scope is irrelevant |
+| No rules match | Base price returned, "No offers available" shown |
+| Zero or negative CSV values | Rejected at parse time with row-level error |
+| LLM returns invalid JSON | Caught, surfaced as parse error with retry guidance |
 
 ---
 
 ## Tech Stack
 
-- **Vite** + **React 18** — fast dev, instant HMR
-- **Tailwind CSS v4** — utility-first styling
-- **pdf.js** — client-side PDF text extraction
-- **Claude API** (Anthropic) — natural language rule parsing
-- **Framer Motion** — subtle animations on state changes
-- **PapaParse** — robust CSV parsing
+| Layer | Tool | Why |
+|-------|------|-----|
+| Build | Vite 5 | Fast dev server, instant HMR |
+| UI | React 18 | Component model, hooks for state |
+| Styling | Tailwind CSS v4 | Utility-first, dark mode via class strategy |
+| CSV Parsing | PapaParse | Handles edge cases (quoted commas, BOM) |
+| PDF Parsing | pdf.js | Client-side, no backend dependency |
+| NLP | Local regex + Claude API | Works without API key; API for complex cases |
+| Animation | Framer Motion | Subtle transitions on state changes |
 
 ---
 
-## Discount Logic
+## Running Locally
 
-- When multiple non-stackable rules match an item, the one giving the **largest saving in rupees** is applied.
-- Rules marked `stackable: true` apply **on top of** the winning non-stackable rule.
-- If no rules match, the base price is returned with a "No offers available" note.
-- **Cart-level rules** apply to the entire cart total after all item-level discounts, provided the threshold is met.
+```bash
+npm install          # install dependencies
+npm run dev          # start dev server at localhost:5173
+npm run build        # production build → dist/
+```
 
-## Expected Results (Sample Data)
-
-| Item    | Base Price | Final Price | Status         |
-|---------|-----------|-------------|----------------|
-| ITEM-01 | Rs.1,299  | Rs.1,104    | Max discount   |
-| ITEM-02 | Rs.849    | Rs.629      | Stacked        |
-| ITEM-03 | Rs.599    | Rs.509      | Discount applied |
-| ITEM-04 | Rs.2,499  | Rs.2,499    | No offer       |
-| ITEM-05 | Rs.449    | Rs.382      | Discount applied |
-| ITEM-06 | Rs.899    | Rs.809      | Discount applied |
-| **Subtotal** | | **Rs.5,932** | |
-| Cart Offer (RULE-04) | | −Rs.593 | 10% off |
-| **Final Total** | | **Rs.5,339** | |
+No environment variables required. The Anthropic API key (for complex NLP rules only) is entered at runtime in the UI — never stored.
 
 ---
 
-## API Key
+## Submission
 
-The natural language feature requires an Anthropic API key. Enter it in the UI field (stored in memory only — never persisted or sent anywhere except Anthropic's API).
+- **GitHub:** [github.com/dhruvWorkss/discount-engine-assignment](https://github.com/dhruvWorkss/discount-engine-assignment)
+- **Live Demo:** [discount-engine-iota.vercel.app](https://discount-engine-iota.vercel.app)
+- **Loom Walkthrough:** [Watch here](https://www.loom.com/share/eb892fe1087c4526951ab105981b6081)
