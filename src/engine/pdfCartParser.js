@@ -107,4 +107,27 @@ function parseCartLine(line) {
       break
     }
   }
-  // ... rest unchanged
+
+  if (!platform) {
+    const parts = remaining.split(/\s{2,}|\t+/)
+    if (parts.length >= 3) {
+      platform = parts.pop().trim()
+      remaining = parts.join('  ')
+    }
+  }
+
+  const parts = remaining.split(/\s{2,}|\t+/).filter(Boolean)
+  let product, brand
+
+  if (parts.length >= 2) {
+    product = parts[0].trim()
+    brand = parts.slice(1).join(' ').trim()
+  } else {
+    product = remaining.trim()
+    brand = 'Unknown'
+  }
+
+  if (!product || !platform) return null
+
+  return { product, brand, platform, basePrice }
+}
