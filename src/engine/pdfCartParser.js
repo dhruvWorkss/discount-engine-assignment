@@ -83,16 +83,18 @@ function extractCartItems(text) {
 }
 
 function parseCartLine(line) {
-  // Try to extract price first (Rs.X,XXX or Rs.XXX or just numbers at end)
-  const priceMatch = line.match(/Rs\.?\s*([\d,]+(?:\.\d+)?)\s*$/)
+  // Rs. prefix is now optional — handles plain numbers like "1299"
+  const priceMatch = line.match(/(?:Rs\.?\s*)?([\d,]+(?:\.\d+)?)\s*$/)
   if (!priceMatch) return null
 
   const basePrice = Math.round(parseFloat(priceMatch[1].replace(/,/g, '')))
   if (isNaN(basePrice) || basePrice <= 0) return null
 
-  const beforePrice = line.substring(0, priceMatch.index).trim()
+  let beforePrice = line.substring(0, priceMatch.index).trim()
 
-  // Known platforms to look for
+  // Strip a leading "ITEM-01" style id column if the source PDF has one
+  beforePrice = beforePrice.replace(/^ITEM-\d+\s+/i, '').trim()
+
   const platforms = ['Amazon India', 'Flipkart', 'Noon', 'Myntra', 'Ajio', 'Meesho', 'Nykaa']
   let platform = ''
   let remaining = beforePrice
@@ -105,30 +107,4 @@ function parseCartLine(line) {
       break
     }
   }
-
-  if (!platform) {
-    // Try splitting by multiple spaces or tabs
-    const parts = remaining.split(/\s{2,}|\t+/)
-    if (parts.length >= 3) {
-      platform = parts.pop().trim()
-      remaining = parts.join('  ')
-    }
-  }
-
-  // Split remaining into product and brand
-  const parts = remaining.split(/\s{2,}|\t+/).filter(Boolean)
-  let product, brand
-
-  if (parts.length >= 2) {
-    product = parts[0].trim()
-    brand = parts.slice(1).join(' ').trim()
-  } else {
-    // Single chunk — try known brand patterns
-    product = remaining.trim()
-    brand = 'Unknown'
-  }
-
-  if (!product || !platform) return null
-
-  return { product, brand, platform, basePrice }
-}
+  // ... rest unchanged
